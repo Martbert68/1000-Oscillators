@@ -1,24 +1,39 @@
-/* grand.c...
-mover.c ran out of CPU and memory with its crazy inner loop so this is a freshening and rethinking of that.
+/* grand.c */
 
-Going to add multi point and variable timing reverb in a pointer to a 2 hour long array.
-Going to just step along this huge array to reduce all the testing to see if Im at the end. I have RAM but not Bandwidth
-Going to get rid of all these globals.
-I mean looking up a in a global array in another global...in the inner loop. PLEASE
-				f=notes[tnote[s]];
-The UI is pants but can stay for now. It's main_osc that needs help.
-
-*/
-
+#include <alsa/asoundlib.h>
+#include <pthread.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/Xos.h>
 
 
-// HOW BIG IS THE BUFFER? 2 Hours at 44100 * 60 *2
-#define SMAX 2*44100*60*2 
+
+/* here are our X variables */
+Display *display;
+XColor    color[100];
+int screen;
+Window win;
+GC gc;
+unsigned long black,white;
+#define X_SIZE 1800
+#define Y_SIZE 1000 
+
+/* here are our X routines declared! */
+void init_x();
+void close_x();
+void redraw();
+
+/* sound */
+void *spkr();
+long where;
 
 
 static float notes[108]={
@@ -32,10 +47,11 @@ static float notes[108]={
 2093, 2217, 2349, 2489, 2637, 2794, 2960, 3136, 3322, 3520, 3729, 3951,
 4186, 4435, 4699, 4978, 5274, 5588, 5920, 6272, 6645, 7040, 7459, 7902 }; 
 
+short *waveform;
 
 void usage ()
 {
-	printf("usage: mover\n");
+	printf("usage: grand\n");
 	exit (1);
 }
 
@@ -44,8 +60,6 @@ int main(int argc,char *argv[])
  
 	int *fhead,len,chan,sample_rate,bits_pers,byte_rate,ba,size;
 	int number,along,osc,note;
-	short *waveform;
-
 
 	number=1000;
 
@@ -53,6 +67,7 @@ int main(int argc,char *argv[])
 	double fvar[1000];
 	double fcut[1000];
 
+        init_x();
 
         fhead=(int *)malloc(sizeof(int)*11);
 
@@ -66,43 +81,54 @@ int main(int argc,char *argv[])
         waveform=(short *)malloc(sizeof(short)*size);
 
 	// setup our oscillatorsi drift up to 3%. 
-	for (osc=0;osc<number;osc++){ fvar[osc]=1+(double)(rand()%30000)/1000000;}
-	for (osc=0;osc<number;osc++){ fcut[osc]=0.5+(double)(rand()%32768)/32768;}
+	for (osc=0;osc<number;osc++){ fvar[osc]=1.05-(double)(rand()%10000)/100000;}
+	for (osc=0;osc<number;osc++){ fcut[osc]=(double)(rand()%32768)/32767;}
+	for (osc=0;osc<number;osc++){ fpoint[osc]=(double)(rand()%31415)/5000;}
+	//for (osc=0;osc<number;osc++){ fpoint[osc]=0;}
+	number=1000;
 
 	for (along=0;along<size;along+=2)
 	{
 		long left,right;
+		double alongness,alongprime;
+		alongness=(double)along/(double)size;
+		alongprime=1-alongness;
 		left=0;right=0;
-		note=(108*along)/size;
-		//note=48+((8*along)/size);
+		//note=(108*along)/size;
+		note=48+((8*along)/size);
+		//note=48;
+
+
 		for (osc=0;osc<number;osc+=2)
 		{
 			int o_left,o_right;				
-			float lf,rf;
+			float lf,rf,lcut,rcut;
 
-			fpoint[osc]+=(2*M_PI*(notes[note]*fvar[osc]))/sample_rate;
-			fpoint[osc+1]+=(2*M_PI*(notes[note]*fvar[osc+1]))/sample_rate;
+			fpoint[osc]+=(2*M_PI*(notes[note]*(alongprime+(alongness*fvar[osc]))))/sample_rate;
+			fpoint[osc+1]+=(2*M_PI*(notes[note]*(alongprime+(alongness*fvar[osc+1]))))/sample_rate;
 
 			lf=(sin(fpoint[osc]));
 			rf=(sin(fpoint[osc+1]));
 
-			if (lf > 0 && lf>fcut[osc]){ lf=1;}
-			if (lf < 0 && lf<-fcut[osc]){ lf=-1;}
+			lcut=alongprime+(alongness*fcut[osc]);
+			rcut=alongprime+(alongness*fcut[osc+1]);
 
-			if (rf > 0 && rf>fcut[osc+1]){ rf=1;}
-			if (rf < 0 && rf<-fcut[osc+1]){ rf=-1;}
+			if (lf > 0 && lf>lcut){ lf=1;}
+			if (lf < 0 && lf<-lcut){ lf=-1;}
 
-			o_left=32760*lf;
-			o_right=32760*rf;
+			if (rf > 0 && rf>rcut){ rf=1;}
+			if (rf < 0 && rf<-rcut){ rf=-1;}
+
+			o_left=42767*lf;
+			o_right=42767*rf;
 
 			left=left+o_left;
 			right=right+o_right;
 		}
-		waveform[along]=(left/number);
-		waveform[along+1]=(right/number);
+		waveform[along]=(2*left/number);
+		waveform[along+1]=(2*right/number);
+		//if (along%88200==0){number+=2;}
 	}	
-
-
 
 
         fhead[0]=0x46464952;
@@ -123,146 +149,160 @@ int main(int argc,char *argv[])
         fwrite(fhead,sizeof(int),11,record);
         fwrite(waveform,sizeof(short),size,record);
         fclose (record);
-}
 
-/*
-void main_osc (long from, long to, short *ring)
-{
-	long a;
-	long vpr[ROWS];
-	for (a=from;a<to;a+=2)
+       pthread_t spkr_id;
+
+       struct timespec tim, tim2;
+               tim.tv_sec = 0;
+        tim.tv_nsec = 100L;
+
+	where=0;
+        pthread_create(&spkr_id, NULL, spkr, NULL);
+	long my_point,chunk;
+	chunk=17640;
+	my_point=0;
+	while (where<size)
 	{
-		int s;
-		long l,r;
-		l=0;r=0;
-
-		vp+=2;
-                if (vp>=VBUF){vp=0;}
-
-
-		for (s=0;s<ROWS;s++)
+		while (where<my_point+chunk)
 		{
-			long p;
-			float f,qu,qi,dl,dr,along,blong,gdl,gdr,bdl,bdr,bal,bar,vwalong,vcalong,ghalong,bhalong,lfalong,hfalong,wfalong;
-			long lm,rm,sil,sir;
-			lm=0;rm=0;
-			p=point[s];
-			if (p>0)
-			{
-				float fphase;
-				int amp;
-				along=(float)p/(float)ssize[s];
-				blong=1-along;
-
-				fphase=(along*(float)phase[s]);
-				f=notes[tnote[s]];
-				amp=envelope[s][(p*(X_ENV-1))/ssize[s]];
-				//printf ("%d %ld %d\n",amp,p,ssize[s]);
-
-				if (vvowi[s]==0){ vwalong=1;}
-				if (vvowi[s]==1){ vwalong=along;}
-				if (vvowi[s]==2){ vwalong=blong;}
-				if (vvowi[s]==3){ vwalong=(1+sin((float)(vvowf[s]*p)/441000)/2);}
-
-				if (vvoci[s]==0){ vcalong=1;}
-				if (vvoci[s]==1){ vcalong=along;}
-				if (vvoci[s]==2){ vcalong=blong;}
-				if (vvoci[s]==3){ vcalong=(1+sin((float)(vvocf[s]*p)/441000)/2);}
-
-				if (badhi[s]==0){ bhalong=1;}
-				if (badhi[s]==1){ bhalong=along;}
-				if (badhi[s]==2){ bhalong=blong;}
-				if (badhi[s]==3){ bhalong=(1+sin((float)(badhf[s]*p)/441000)/2);}
-
-				if (goodhi[s]==0){ ghalong=1;}
-				if (goodhi[s]==1){ ghalong=along;}
-				if (goodhi[s]==2){ ghalong=blong;}
-				if (goodhi[s]==3){ ghalong=(1+sin((float)(goodhf[s]*p)/441000)/2);}
-
-				if (lfilti[s]==0){ lfalong=1;}
-				if (lfilti[s]==1){ lfalong=along;}
-				if (lfilti[s]==2){ lfalong=blong;}
-				if (lfilti[s]==3){ lfalong=(1+sin((float)(lfiltf[s]*p)/441000)/2);}
-
-				if (hfilti[s]==0){ hfalong=1;}
-				if (hfilti[s]==1){ hfalong=along;}
-				if (hfilti[s]==2){ hfalong=blong;}
-				if (hfilti[s]==3){ hfalong=(1+sin((float)(hfiltf[s]*p)/441000)/2);}
-
-				if (wobi[s]==0){ wfalong=1;}
-				if (wobi[s]==1){ wfalong=along;}
-				if (wobi[s]==2){ wfalong=blong;}
-				if (wobi[s]==3){ wfalong=(1+sin((float)(wobf[s]*p)/441000)/2);}
-
-				qu=(vcalong*(float)vvoc[s])/300;
-				qi=(vwalong*(float)vvow[s])/300;
-
-				basep[s]+=(f+(wob[s]*wfalong))/22050;
-				goodp[s]+=((3*f)+(wob[s]*wfalong))/22050;
-				badp[s]+=((1.68*f)+(wob[s]*wfalong))/22050;
-
-				bal=sin(fphase+(M_PI*basep[s])); bar=sin((M_PI*basep[s])-fphase);
-				gdl=sin(fphase+(M_PI*goodp[s])); gdr=sin((M_PI*goodp[s])-fphase);
-				bdl=sin(fphase+(M_PI*badp[s])); bdr=sin((M_PI*badp[s])-fphase);
-
-
-				if (bal<qi && bal>0){bal=0;} if (-bal<qi && bal<0){bal=0;} if (bal>qu){bal=1;} if (-bal>qu){bal=-1;}
-				if (bar<qi && bar>0){bar=0;} if (-bar<qi && bar<0){bal=0;} if (bar>qu){bar=1;} if (-bar>qu){bar=-1;}
-
-				if (gdl<qi && gdl>0){gdl=0;} if (-gdl<qi && gdl<0){gdl=0;} if (gdl>qu){gdl=1;} if (-gdl>qu){gdl=-1;}
-				if (gdr<qi && gdr>0){gdr=0;} if (-gdr<qi && gdr<0){bal=0;} if (gdr>qu){gdr=1;} if (-gdr>qu){gdr=-1;}
-
-				if (bdl<qi && bdl>0){bdl=0;} if (-bdl<qi && bdl<0){bal=0;} if (bdl>qu){bdl=1;} if (-bdl>qu){bdl=-1;}
-				if (bdr<qi && bdr>0){bdr=0;} if (-bdr<qi && bdr<0){bdr=0;} if (bdr>qu){bdr=1;} if (-bdr>qu){bdr=-1;}
-
-
-				sil=(300*bal)+(gdl*ghalong*(float)goodh[s])+(bdl*bhalong*(float)badh[s]);
-				sir=(300*bar)+(gdr*ghalong*(float)goodh[s])+(bdr*bhalong*(float)badh[s]);
-
-
-				//filter low pass
-				dl=sil-prevl[s];
-				dr=sir-prevr[s];
-				sil=sil-((lfalong*lfilt[s]*dl)/300); 
-				sir=sir-((lfalong*lfilt[s]*dr)/300); 
-
-				//filter high pass
-				
-				dl=sil-prevl[s];
-				dr=sir-prevr[s];
-				sil=prevl[s]+((hfalong*hfilt[s]*dl)/300); 
-				sir=prevr[s]+((hfalong*hfilt[s]*dr)/300); 
-
-				prevl[s]=sil;prevr[s]=sir; 
-				//amp =512 pan=300 
-				lm=(amp*sil*lpan[s]);
-				rm=(amp*sir*rpan[s]);
-
-				point[s]+=2;
-				if (point[s]>=ssize[s]){ basep[s]=0;goodp[s]=0;badp[s]=0;printf("%ld %d\n",point[s],ssize[s]);point[s]=0; }
-			}
-
-                        vpr[s]=vp+vdur[s]; if (vpr[s]>=VBUF){vpr[s]=vpr[s]-VBUF;}
-
-			l=l+lm+verb[s][vp];
-			r=r+rm+verb[s][vp+1]; 
-			//printf ("vprs %d\n",vpr[s]);
-			long lv,rv;
-			lv=(vamp[s]*(lm+verb[s][vp]))/300;
-			rv=(vamp[s]*(rm+verb[s][vp+1]))/300;
-			verb[s][vpr[s]]=((lv*vlpan[s])+(rv*vrpan[s]))/300; 
-			verb[s][vpr[s]+1]=((rv*vlpan[s])+(lv*vrpan[s]))/300; 
+                       nanosleep(&tim , &tim2);
 		}
-		// pan is 300 amplitude is 512 times too big for a short. plan also or 4 sounds at once. 512*4*300 
-		//
-		int lc,rc;
-		lc=l/6144;
-		rc=r/6144;
-		if (lc>32600 || lc < -32600 ){ printf ("left clip \n");}
-		if (rc>32600 || rc < -32600 ){ printf ("right clip \n");}
-		ring[a]=lc;
-		ring[a+1]=rc;
-		// the verb pointer.
+		long slice;
+		int ex,why;
+		ex=0;
+		XClearWindow(display, win);
+		XSetForeground(display,gc,color[1].pixel);
+		for (slice=my_point;slice<my_point+chunk;slice+=2)
+		{
+			why=(waveform[slice]+32768)/110;
+			XDrawPoint(display, win, gc, ex, why);
+			if (slice%8==0){ ex++;}
+		}
+		XSetForeground(display,gc,color[3].pixel);
+		ex=0;
+		for (slice=my_point+1;slice<my_point+chunk;slice+=2)
+		{
+			why=(waveform[slice]+32768)/110;
+			XDrawPoint(display, win, gc, ex, why+500);
+			if (slice%8==1){ ex++;}
+		}
+		my_point+=chunk;
 	}
 }
-*/
+
+
+void *spkr(void ) {
+        // This handles the speakers.
+
+
+  int rc;
+  int size;
+  snd_pcm_t *handle;
+  snd_pcm_hw_params_t *params;
+  unsigned int val;
+  int dir;
+  snd_pcm_uframes_t frames;
+  //char *buffer;
+
+  /* Open PCM device for playback. */
+  rc = snd_pcm_open(&handle, "default",
+                    SND_PCM_STREAM_PLAYBACK, 0);
+  if (rc < 0) {
+    fprintf(stderr,
+            "unable to open pcm device: %s\n",
+            snd_strerror(rc));
+    exit(1);
+  }
+  /* Allocate a hardware parameters object. */
+  snd_pcm_hw_params_alloca(&params);
+  /* Fill it in with default values. */
+  snd_pcm_hw_params_any(handle, params);
+  /* Set the desired hardware parameters. */
+  /* Interleaved mode */
+  snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+  /* Signed 16-bit little-endian format */
+  snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S16_LE);
+  /* Two channels (stereo) */
+  snd_pcm_hw_params_set_channels(handle, params, 2);
+  /* 44100 bits/second sampling rate (CD quality) */
+  val = 44100;
+  snd_pcm_hw_params_set_rate_near(handle, params, &val, &dir);
+  /* Set period size to 32 frames. */
+  frames = 64;
+  snd_pcm_hw_params_set_period_size_near(handle, params, &frames, &dir);
+  /* Write the parameters to the aux */
+  rc = snd_pcm_hw_params(handle, params);
+  if (rc < 0) {
+    fprintf(stderr,
+            "unable to set hw parameters: %s\n",
+            snd_strerror(rc));
+    exit(1);
+  }
+
+  /* Use a buffer large enough to hold one period */
+  snd_pcm_hw_params_get_period_size(params, &frames, &dir);
+  //size = frames * 4; /* 2 bytes/sample, 2 channels 
+  // size as in number of data points along
+  size = frames * 2;
+
+  snd_pcm_hw_params_get_period_time(params, &val, &dir);
+
+  while (1 > 0) {
+    rc = snd_pcm_writei(handle, (waveform+where), frames);
+    if (rc == -EPIPE) {
+      /* EPIPE means underrun */
+      fprintf(stderr, "underrun occurred\n");
+      snd_pcm_prepare(handle);
+    } else if (rc < 0) {
+      fprintf(stderr,
+              "error from writei: %s\n",
+              snd_strerror(rc));
+    }  else if (rc != (int)frames) {
+      fprintf(stderr,
+              "short write, write %d frames\n", rc);
+    }
+    where+=size;
+  }
+
+  snd_pcm_drain(handle);
+  snd_pcm_close(handle);
+  //free(buffer);
+
+  return 0;
+}
+
+void init_x()
+{
+/* get the colors black and white (see section for details) */
+        XInitThreads();
+        //x_buffer=(unsigned char *)malloc(sizeof(unsigned char)*4*VX_SIZE*VY_SIZE);
+        display=XOpenDisplay((char *)0);
+        screen=DefaultScreen(display);
+        black=BlackPixel(display,screen),
+        white=WhitePixel(display,screen);
+        win=XCreateSimpleWindow(display,DefaultRootWindow(display),0,0, X_SIZE, Y_SIZE, 5, white,black);
+        XSetStandardProperties(display,win,"scope","scope",None,NULL,0,NULL);
+        XSelectInput(display, win, ExposureMask|ButtonPressMask|KeyPressMask|ButtonReleaseMask|ButtonMotionMask);
+        //XSelectInput(display, vwin, ExposureMask|ButtonPressMask|KeyPressMask|ButtonReleaseMask|ButtonMotionMask);
+        gc=XCreateGC(display, win, 0,0);
+        XSetBackground(display,gc,black); XSetForeground(display,gc,white);
+        XClearWindow(display, win); 
+        XMapRaised(display, win);
+        XMoveWindow(display, win,0,0);
+        Visual *visual=DefaultVisual(display, 0);
+        Colormap cmap;
+        cmap = DefaultColormap(display, screen);
+        color[0].red = 65535; color[0].green = 65535; color[0].blue = 65535;
+        color[1].red = 65535; color[1].green = 0; color[1].blue = 0;
+        color[2].red = 0; color[2].green = 0; color[2].blue = 65535;
+        color[3].red = 0; color[3].green = 65535; color[3].blue = 0;
+        color[4].red = 0; color[4].green = 65535; color[4].blue = 65535;
+        color[5].red = 65535; color[5].green = 65535; color[5].blue = 0;
+        XAllocColor(display, cmap, &color[0]);
+        XAllocColor(display, cmap, &color[1]);
+        XAllocColor(display, cmap, &color[2]);
+        XAllocColor(display, cmap, &color[3]);
+        XAllocColor(display, cmap, &color[4]);
+        XAllocColor(display, cmap, &color[5]);
+}
+
