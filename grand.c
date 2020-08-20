@@ -23,8 +23,8 @@ int screen;
 Window win;
 GC gc;
 unsigned long black,white;
-#define X_SIZE 1800
-#define Y_SIZE 1000 
+#define X_SIZE 800 
+#define Y_SIZE 550 
 
 /* here are our X routines declared! */
 void init_x();
@@ -60,6 +60,7 @@ int main(int argc,char *argv[])
  
 	int *fhead,len,chan,sample_rate,bits_pers,byte_rate,ba,size;
 	int number,along,osc,note;
+	char stop;
 
 	number=1000;
 
@@ -71,7 +72,7 @@ int main(int argc,char *argv[])
 
         fhead=(int *)malloc(sizeof(int)*11);
 
-        len=60;
+        len=300;
         chan=2;
         sample_rate=44100;
         bits_pers=16;
@@ -80,38 +81,29 @@ int main(int argc,char *argv[])
         size=chan*len*sample_rate;
         waveform=(short *)malloc(sizeof(short)*size);
 
-	// setup our oscillatorsi drift up to 3%. 
-	for (osc=0;osc<number;osc++){ fvar[osc]=1.05-(double)(rand()%10000)/100000;}
-	for (osc=0;osc<number;osc++){ fcut[osc]=(double)(rand()%32768)/32767;}
+	// setup our oscillatorsi drift up to +-3HZ 
+	for (osc=0;osc<number;osc++){ fvar[osc]=10-((double)(rand()%20000)/1000);}
+	for (osc=0;osc<number;osc++){ fcut[osc]=0.9;}
 	for (osc=0;osc<number;osc++){ fpoint[osc]=(double)(rand()%31415)/5000;}
 	//for (osc=0;osc<number;osc++){ fpoint[osc]=0;}
-	number=1000;
 
 	for (along=0;along<size;along+=2)
 	{
-		long left,right;
-		double alongness,alongprime;
-		alongness=(double)along/(double)size;
-		alongprime=1-alongness;
+		double left,right;
 		left=0;right=0;
-		//note=(108*along)/size;
-		note=48+((8*along)/size);
-		//note=48;
-
 
 		for (osc=0;osc<number;osc+=2)
 		{
-			int o_left,o_right;				
-			float lf,rf,lcut,rcut;
+			double lf,rf,lcut,rcut;
 
-			fpoint[osc]+=(2*M_PI*(notes[note]*(alongprime+(alongness*fvar[osc]))))/sample_rate;
-			fpoint[osc+1]+=(2*M_PI*(notes[note]*(alongprime+(alongness*fvar[osc+1]))))/sample_rate;
+			fpoint[osc]+=(2*M_PI*(notes[36]+fvar[osc]))/sample_rate;
+			fpoint[osc+1]+=(2*M_PI*(notes[48]+fvar[osc+1]))/sample_rate;
 
 			lf=(sin(fpoint[osc]));
 			rf=(sin(fpoint[osc+1]));
 
-			lcut=alongprime+(alongness*fcut[osc]);
-			rcut=alongprime+(alongness*fcut[osc+1]);
+			lcut=fcut[osc];
+			rcut=fcut[osc+1];
 
 			if (lf > 0 && lf>lcut){ lf=1;}
 			if (lf < 0 && lf<-lcut){ lf=-1;}
@@ -119,15 +111,12 @@ int main(int argc,char *argv[])
 			if (rf > 0 && rf>rcut){ rf=1;}
 			if (rf < 0 && rf<-rcut){ rf=-1;}
 
-			o_left=42767*lf;
-			o_right=42767*rf;
-
-			left=left+o_left;
-			right=right+o_right;
+			left=left+lf;
+			right=right+rf;
 		}
-		waveform[along]=(2*left/number);
-		waveform[along+1]=(2*right/number);
-		//if (along%88200==0){number+=2;}
+		waveform[along]=(350000*left/number);
+		waveform[along+1]=(350000*right/number);
+		if (along%88200==0){printf("Completed %d seconds \n",along/88200);}
 	}	
 
 
@@ -150,11 +139,15 @@ int main(int argc,char *argv[])
         fwrite(waveform,sizeof(short),size,record);
         fclose (record);
 
+	printf ("waiting \n");
+	scanf("%c",&stop);
+
        pthread_t spkr_id;
 
        struct timespec tim, tim2;
                tim.tv_sec = 0;
         tim.tv_nsec = 100L;
+
 
 	where=0;
         pthread_create(&spkr_id, NULL, spkr, NULL);
@@ -172,21 +165,22 @@ int main(int argc,char *argv[])
 		ex=0;
 		XClearWindow(display, win);
 		XSetForeground(display,gc,color[1].pixel);
-		for (slice=my_point;slice<my_point+chunk;slice+=2)
+		for (slice=my_point;slice<my_point+chunk;slice+=4)
 		{
-			why=(waveform[slice]+32768)/110;
+			why=(waveform[slice]+32768)/220;
 			XDrawPoint(display, win, gc, ex, why);
-			if (slice%8==0){ ex++;}
+			if (slice%16==0){ ex++;}
 		}
 		XSetForeground(display,gc,color[3].pixel);
 		ex=0;
-		for (slice=my_point+1;slice<my_point+chunk;slice+=2)
+		for (slice=my_point+1;slice<my_point+chunk;slice+=4)
 		{
-			why=(waveform[slice]+32768)/110;
-			XDrawPoint(display, win, gc, ex, why+500);
-			if (slice%8==1){ ex++;}
+			why=(waveform[slice]+32768)/220;
+			XDrawPoint(display, win, gc, ex, why+250);
+			if (slice%16==1){ ex++;}
 		}
 		my_point+=chunk;
+		XFlush(display);
 	}
 }
 
@@ -281,7 +275,7 @@ void init_x()
         black=BlackPixel(display,screen),
         white=WhitePixel(display,screen);
         win=XCreateSimpleWindow(display,DefaultRootWindow(display),0,0, X_SIZE, Y_SIZE, 5, white,black);
-        XSetStandardProperties(display,win,"scope","scope",None,NULL,0,NULL);
+        XSetStandardProperties(display,win,"PC scope","PC scope",None,NULL,0,NULL);
         XSelectInput(display, win, ExposureMask|ButtonPressMask|KeyPressMask|ButtonReleaseMask|ButtonMotionMask);
         //XSelectInput(display, vwin, ExposureMask|ButtonPressMask|KeyPressMask|ButtonReleaseMask|ButtonMotionMask);
         gc=XCreateGC(display, win, 0,0);
@@ -293,9 +287,9 @@ void init_x()
         Colormap cmap;
         cmap = DefaultColormap(display, screen);
         color[0].red = 65535; color[0].green = 65535; color[0].blue = 65535;
-        color[1].red = 65535; color[1].green = 0; color[1].blue = 0;
-        color[2].red = 0; color[2].green = 0; color[2].blue = 65535;
-        color[3].red = 0; color[3].green = 65535; color[3].blue = 0;
+        color[1].red = 65535; color[1].green = 65535; color[1].blue = 0;
+        color[2].red = 0; color[2].green = 65535; color[2].blue = 65535;
+        color[3].red = 0; color[3].green = 65535; color[3].blue = 65535;
         color[4].red = 0; color[4].green = 65535; color[4].blue = 65535;
         color[5].red = 65535; color[5].green = 65535; color[5].blue = 0;
         XAllocColor(display, cmap, &color[0]);
